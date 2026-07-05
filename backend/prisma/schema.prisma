@@ -1,0 +1,390 @@
+// ============================================================
+// ISIP — Prisma Schema
+// Industrial Safety Intelligence Platform
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Enums ────────────────────────────────────────────────────
+
+enum UserRole {
+  ADMIN
+  SAFETY_OFFICER
+  OPERATOR
+  TECHNICIAN
+  VIEWER
+}
+
+enum ZoneRiskLevel {
+  SAFE
+  LOW
+  MODERATE
+  WARNING
+  CRITICAL
+}
+
+enum EquipmentType {
+  FURNACE
+  CONVERTER
+  BOILER
+  COMPRESSOR
+  TANK
+  MILL
+  CRANE
+  PUMP
+  VALVE
+  ELECTRICAL_PANEL
+  PIPELINE
+  OTHER
+}
+
+enum EquipmentStatus {
+  OPERATIONAL
+  MAINTENANCE
+  FAULTY
+  OFFLINE
+  DECOMMISSIONED
+}
+
+enum SensorType {
+  GAS
+  TEMPERATURE
+  PRESSURE
+  VIBRATION
+  HUMIDITY
+  FLOW
+}
+
+enum SensorStatus {
+  ONLINE
+  OFFLINE
+  WARNING
+  CRITICAL
+}
+
+enum SensorTrend {
+  UP
+  DOWN
+  STABLE
+}
+
+enum WorkerStatus {
+  ACTIVE
+  BREAK
+  EMERGENCY
+  EVACUATED
+  OFF_SHIFT
+}
+
+enum PPEStatus {
+  COMPLIANT
+  NON_COMPLIANT
+  PARTIAL
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum PermitType {
+  HOT_WORK
+  CONFINED_SPACE
+  ELECTRICAL
+  WORKING_AT_HEIGHT
+  CHEMICAL
+}
+
+enum PermitStatus {
+  ACTIVE
+  PENDING
+  EXPIRED
+  SUSPENDED
+  REVOKED
+}
+
+enum AlertType {
+  GAS
+  TEMPERATURE
+  PRESSURE
+  EQUIPMENT
+  WORKER
+  PERMIT
+  SYSTEM
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum TimelineCategory {
+  SENSOR
+  WORKER
+  PERMIT
+  EQUIPMENT
+  AI
+  SYSTEM
+}
+
+enum ReportType {
+  DAILY_SAFETY
+  INCIDENT
+  RISK_ANALYSIS
+  COMPLIANCE
+  WORKER_SAFETY
+  EQUIPMENT_HEALTH
+}
+
+enum ReportFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+  ON_DEMAND
+}
+
+enum ReportStatus {
+  PENDING
+  GENERATING
+  COMPLETED
+  FAILED
+}
+
+// ── Models ───────────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  username  String   @unique
+  password  String
+  firstName String   @map("first_name")
+  lastName  String   @map("last_name")
+  role      UserRole @default(VIEWER)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  issuedPermits    Permit[]        @relation("PermitIssuer")
+  acknowledgedAlerts Alert[]       @relation("AlertAcknowledger")
+  generatedReports Report[]        @relation("ReportGenerator")
+
+  @@map("users")
+}
+
+model Zone {
+  id          String        @id @default(uuid())
+  name        String        @unique
+  code        String        @unique
+  description String?
+  riskLevel   ZoneRiskLevel @default(SAFE) @map("risk_level")
+  latitude    Float?
+  longitude   Float?
+  isActive    Boolean       @default(true) @map("is_active")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  equipment      Equipment[]
+  sensors        Sensor[]
+  workers        Worker[]
+  permits        Permit[]
+  alerts         Alert[]
+  timelineEvents TimelineEvent[]
+
+  @@map("zones")
+}
+
+model Equipment {
+  id        String          @id @default(uuid())
+  name      String
+  code      String          @unique
+  type      EquipmentType   @default(OTHER)
+  status    EquipmentStatus @default(OPERATIONAL)
+  zoneId    String          @map("zone_id")
+  createdAt DateTime        @default(now()) @map("created_at")
+  updatedAt DateTime        @updatedAt @map("updated_at")
+
+  // Relations
+  zone    Zone              @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+  sensors Sensor[]
+  permits PermitEquipment[]
+
+  @@index([zoneId])
+  @@map("equipment")
+}
+
+model Sensor {
+  id          String       @id @default(uuid())
+  name        String
+  type        SensorType
+  value       Float        @default(0)
+  unit        String
+  min         Float        @default(0)
+  max         Float        @default(100)
+  threshold   Float        @default(50)
+  status      SensorStatus @default(ONLINE)
+  trend       SensorTrend  @default(STABLE)
+  zoneId      String       @map("zone_id")
+  equipmentId String?      @map("equipment_id")
+  lastReading DateTime?    @map("last_reading")
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  // Relations
+  zone      Zone       @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+  equipment Equipment? @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+
+  @@index([zoneId])
+  @@index([equipmentId])
+  @@index([type])
+  @@index([status])
+  @@map("sensors")
+}
+
+model Worker {
+  id          String       @id @default(uuid())
+  name        String
+  role        String
+  badge       String       @unique
+  shift       String       @default("Morning")
+  status      WorkerStatus @default(ACTIVE)
+  ppeStatus   PPEStatus    @default(COMPLIANT) @map("ppe_status")
+  riskLevel   RiskLevel    @default(LOW) @map("risk_level")
+  heartRate   Float?       @map("heart_rate")
+  gasExposure Float?       @map("gas_exposure")
+  task        String?
+  zoneId      String?      @map("zone_id")
+  permitId    String?      @map("permit_id")
+  lastSeen    DateTime?    @map("last_seen")
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  // Relations
+  zone   Zone?   @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  permit Permit? @relation(fields: [permitId], references: [id], onDelete: SetNull)
+
+  @@index([zoneId])
+  @@index([permitId])
+  @@index([status])
+  @@map("workers")
+}
+
+model Permit {
+  id         String       @id @default(uuid())
+  type       PermitType
+  title      String
+  status     PermitStatus @default(PENDING)
+  riskLevel  RiskLevel    @default(LOW) @map("risk_level")
+  compliance Float        @default(0)
+  startTime  DateTime     @map("start_time")
+  endTime    DateTime     @map("end_time")
+  issuerId   String?      @map("issuer_id")
+  zoneId     String       @map("zone_id")
+  aiRecommendation String? @map("ai_recommendation")
+  createdAt  DateTime     @default(now()) @map("created_at")
+  updatedAt  DateTime     @updatedAt @map("updated_at")
+
+  // Relations
+  issuer    User?             @relation("PermitIssuer", fields: [issuerId], references: [id], onDelete: SetNull)
+  zone      Zone              @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+  workers   Worker[]
+  equipment PermitEquipment[]
+
+  @@index([zoneId])
+  @@index([issuerId])
+  @@index([status])
+  @@index([type])
+  @@map("permits")
+}
+
+// Junction table: Permit ↔ Equipment (many-to-many)
+model PermitEquipment {
+  permitId    String   @map("permit_id")
+  equipmentId String   @map("equipment_id")
+  assignedAt  DateTime @default(now()) @map("assigned_at")
+
+  permit    Permit    @relation(fields: [permitId], references: [id], onDelete: Cascade)
+  equipment Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  @@id([permitId, equipmentId])
+  @@map("permit_equipment")
+}
+
+model Alert {
+  id           String        @id @default(uuid())
+  type         AlertType
+  severity     AlertSeverity @default(INFO)
+  title        String
+  description  String
+  acknowledged Boolean       @default(false)
+  source       String?
+  zoneId       String?       @map("zone_id")
+  userId       String?       @map("user_id")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  zone           Zone? @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  acknowledgedBy User? @relation("AlertAcknowledger", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([zoneId])
+  @@index([severity])
+  @@index([acknowledged])
+  @@index([type])
+  @@map("alerts")
+}
+
+model TimelineEvent {
+  id          String           @id @default(uuid())
+  category    TimelineCategory
+  title       String
+  description String
+  severity    AlertSeverity    @default(INFO)
+  timestamp   DateTime         @default(now())
+  zoneId      String?          @map("zone_id")
+  relatedId   String?          @map("related_id")
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+
+  // Relations
+  zone Zone? @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+
+  @@index([zoneId])
+  @@index([category])
+  @@index([severity])
+  @@index([timestamp])
+  @@map("timeline_events")
+}
+
+model Report {
+  id            String          @id @default(uuid())
+  name          String
+  description   String?
+  type          ReportType
+  frequency     ReportFrequency @default(ON_DEMAND)
+  status        ReportStatus    @default(PENDING)
+  data          Json?
+  generatedById String?         @map("generated_by_id")
+  generatedAt   DateTime?       @map("generated_at")
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+
+  // Relations
+  generatedBy User? @relation("ReportGenerator", fields: [generatedById], references: [id], onDelete: SetNull)
+
+  @@index([type])
+  @@index([status])
+  @@index([generatedById])
+  @@map("reports")
+}
