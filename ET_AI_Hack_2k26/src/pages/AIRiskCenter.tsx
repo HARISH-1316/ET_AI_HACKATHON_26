@@ -7,7 +7,6 @@ import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer,
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, BarChart, Bar
 } from 'recharts';
-import { riskFactors, trendData24h, sensors, workers, permits, alerts } from '../data/mockData';
 import './AIRiskCenter.css';
 
 interface AIRiskCenterProps {
@@ -59,13 +58,26 @@ const whatIfScenarios = [
   { name: 'All Actions', risk: 32, gas: 5.2, workers: 0 },
 ];
 
-const radarData = riskFactors.map(rf => ({
-  subject: rf.factor.split(' ')[0],
-  current: rf.score,
-  threshold: 60,
-}));
-
 const AIRiskCenter: React.FC<AIRiskCenterProps> = ({ liveKPI, onNavigate }) => {
+  const dynamicRiskFactors = [
+    { factor: 'Gas Concentration', score: Math.min(100, Math.max(10, Math.round(liveKPI.riskScore * 1.1))), weight: 0.3, trend: 'up', color: '#EF4444' },
+    { factor: 'Worker Exposure', score: Math.min(100, 20 + (liveKPI.activeWorkers * 8)), weight: 0.25, trend: 'stable', color: '#F59E0B' },
+    { factor: 'Equipment Health', score: Math.min(100, Math.max(10, 100 - Math.round(liveKPI.plantHealth))), weight: 0.2, trend: 'stable', color: '#F59E0B' },
+    { factor: 'Permit Risk', score: Math.min(100, 10 + (liveKPI.activePermits * 12)), weight: 0.15, trend: 'up', color: '#EF4444' },
+    { factor: 'Environmental', score: 42, weight: 0.1, trend: 'down', color: '#22C55E' },
+  ];
+
+  const radarData = dynamicRiskFactors.map(rf => ({
+    subject: rf.factor.split(' ')[0],
+    current: rf.score,
+    threshold: 60,
+  }));
+
+  const trendData = Array.from({ length: 24 }, (_, i) => ({
+    hour: `${String(i).padStart(2, '0')}:00`,
+    riskScore: Math.round(Math.max(10, Math.min(95, liveKPI.riskScore - 15 + Math.sin(i * 0.4) * 10 + Math.random() * 5))),
+  }));
+
   const [selectedRisk, setSelectedRisk] = useState(compoundRisks[0]);
   const [simulating, setSimulating] = useState(false);
   const [simResult, setSimResult] = useState<null | number>(null);
@@ -194,7 +206,7 @@ const AIRiskCenter: React.FC<AIRiskCenterProps> = ({ liveKPI, onNavigate }) => {
         <div className="card card-sm">
           <div className="card-title mb-3">Risk Breakdown</div>
           <div className="risk-breakdown">
-            {riskFactors.map(rf => (
+            {dynamicRiskFactors.map(rf => (
               <div key={rf.factor} className="breakdown-item">
                 <div className="breakdown-header">
                   <span className="breakdown-name">{rf.factor}</span>
@@ -348,7 +360,7 @@ const AIRiskCenter: React.FC<AIRiskCenterProps> = ({ liveKPI, onNavigate }) => {
           </div>
         </div>
         <ResponsiveContainer width="100%" height={130}>
-          <AreaChart data={trendData24h} margin={{top:4,right:4,left:-24,bottom:0}}>
+          <AreaChart data={trendData} margin={{top:4,right:4,left:-24,bottom:0}}>
             <defs>
               <linearGradient id="riskGrad" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#EF4444" stopOpacity={0.3}/>

@@ -17,8 +17,10 @@ import Timeline from './pages/Timeline';
 import ComplianceCenter from './pages/ComplianceCenter';
 import ReportsAnalytics from './pages/ReportsAnalytics';
 
+import { useAuth } from './context/AuthContext';
+
 const App: React.FC = () => {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const { isAuthenticated, loading, logout } = useAuth();
   const [activePage, setActivePage] = useState<PageId>('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const data = useLiveData();
@@ -28,13 +30,22 @@ const App: React.FC = () => {
   };
 
   const handleLogout = () => {
-    setIsLoggedIn(false);
+    logout();
     setActivePage('dashboard');
   };
 
-  if (!isLoggedIn) {
-    return <Login onLoginSuccess={() => setIsLoggedIn(true)} />;
+  if (loading) {
+    return (
+      <div className="login-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0B0F17' }}>
+        <div style={{ color: '#3b82f6', fontSize: '1.25rem', fontWeight: 600 }}>Loading ISIP Platform...</div>
+      </div>
+    );
   }
+
+  if (!isAuthenticated) {
+    return <Login onLoginSuccess={() => {}} />;
+  }
+
 
   return (
     <div className="app-shell">

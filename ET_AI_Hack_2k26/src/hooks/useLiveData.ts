@@ -1,34 +1,226 @@
-import { useState, useEffect, useCallback } from 'react';
-import { sensors, workers, alerts, kpiData } from '../data/mockData';
+// ============================================================
+// ISIP — useLiveData Hook
+// Fetches real API data and subscribes to Socket.IO events
+// Falls back to mock data if backend is unavailable
+// ============================================================
 
-// Simulates real-time updates to sensor values
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { dashboardApi, sensorsApi, alertsApi } from '../services/api';
+import { getSocket, connectSocket, EVENTS } from '../services/socket';
+import { useAuth } from '../context/AuthContext';
+import { sensors as mockSensors, alerts as mockAlerts, kpiData as mockKpi } from '../data/mockData';
+import type { Sensor, Alert } from '../data/mockData';
+
+interface KpiState {
+  plantHealth: number;
+  riskScore: number;
+  activeWorkers: number;
+  sensorsOnline: number;
+  sensorsTotal: number;
+  activePermits: number;
+  criticalAlerts: number;
+  warningAlerts: number;
+  incidentFreeDays: number;
+  complianceScore: number;
+}
+
+function mapApiSensor(s: any): Sensor {
+  return {
+    id: s.id,
+    name: s.name,
+    type: (s.type || '').toLowerCase() as Sensor['type'],
+    zone: s.zone?.name || s.zoneName || s.zone || '',
+    value: s.value ?? 0,
+    unit: s.unit || '',
+    min: s.minValue ?? s.min ?? 0,
+    max: s.maxValue ?? s.max ?? 100,
+    threshold: s.threshold ?? 50,
+    status: (s.status || 'online').toLowerCase() as Sensor['status'],
+    lastUpdated: s.lastReadingAt
+      ? timeAgo(new Date(s.lastReadingAt))
+      : s.lastUpdated || 'N/A',
+    equipment: s.equipment?.name || s.equipmentName || '',
+    trend: (s.trend || 'stable').toLowerCase() as Sensor['trend'],
+    history: s.history || generateHistory(s.value ?? 50, (s.value ?? 50) * 0.05, 24),
+  };
+}
+
+function mapApiAlert(a: any): Alert {
+  return {
+    id: a.id,
+    type: (a.type || 'system').toLowerCase() as Alert['type'],
+    severity: (a.severity || 'info').toLowerCase() as Alert['severity'],
+    title: a.title || '',
+    description: a.description || '',
+    zone: a.zone?.name || a.zoneName || a.zone || '',
+    timestamp: a.createdAt
+      ? new Date(a.createdAt).toLocaleTimeString('en-IN', { hour12: false })
+      : a.timestamp || '',
+    acknowledged: a.acknowledged ?? false,
+    source: a.source || '',
+  };
+}
+
+function timeAgo(date: Date): string {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  return `${Math.floor(seconds / 3600)}h ago`;
+}
+
+function generateHistory(base: number, variance: number, hours: number) {
+  const now = new Date();
+  return Array.from({ length: hours }, (_, i) => {
+    const t = new Date(now.getTime() - (hours - 1 - i) * 3600000);
+    const v = base + (Math.random() - 0.5) * variance * 2;
+    return {
+      time: `${String(t.getHours()).padStart(2, '0')}:00`,
+      value: parseFloat(v.toFixed(2)),
+    };
+  });
+}
+
 export function useLiveData() {
-  const [liveSensors, setLiveSensors] = useState(sensors);
-  const [liveAlerts, setLiveAlerts] = useState(alerts);
-  const [liveKPI, setLiveKPI] = useState(kpiData);
+  const { isAuthenticated } = useAuth();
+  const [liveSensors, setLiveSensors] = useState<Sensor[]>(mockSensors);
+  const [liveAlerts, setLiveAlerts] = useState<Alert[]>(mockAlerts);
+  const [liveKPI, setLiveKPI] = useState<KpiState>(mockKpi);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [backendAvailable, setBackendAvailable] = useState(false);
 
-  // Tick every second for time
+  // Clock tick
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // Tick every 3s for sensor values
+  // Initial data fetch from API
   useEffect(() => {
-    const sensorTimer = setInterval(() => {
-      setLiveSensors(prev => prev.map(sensor => {
-        const noise = (Math.random() - 0.5) * 0.06 * sensor.value;
-        const newValue = parseFloat(Math.max(sensor.min, Math.min(sensor.max * 1.1, sensor.value + noise)).toFixed(2));
-        const ratio = newValue / sensor.threshold;
-        let status: typeof sensor.status = 'online';
-        if (ratio >= 1.0) status = 'critical';
-        else if (ratio >= 0.8) status = 'warning';
-        else if (sensor.status === 'offline') status = 'offline';
-        return { ...sensor, value: newValue, status, lastUpdated: 'just now' };
-      }));
+    if (!isAuthenticated) return;
+    let active = true;
 
-      // Slightly vary KPI
+    const fetchAll = async () => {
+      try {
+        const [kpiRes, sensorRes, alertRes] = await Promise.all([
+          dashboardApi.getKPIs(),
+          sensorsApi.getAll('limit=50'),
+          alertsApi.getAll('limit=50'),
+        ]);
+
+        if (!active) return;
+
+        if (kpiRes.success && kpiRes.data) {
+          const d = kpiRes.data;
+          setLiveKPI({
+            plantHealth: d.plantHealth ?? 76,
+            riskScore: d.riskScore ?? 68,
+            activeWorkers: d.activeWorkers ?? 8,
+            sensorsOnline: d.sensorsOnline ?? 11,
+            sensorsTotal: d.sensorsTotal ?? 12,
+            activePermits: d.activePermits ?? 5,
+            criticalAlerts: d.criticalAlerts ?? 2,
+            warningAlerts: d.warningAlerts ?? 4,
+            incidentFreeDays: d.incidentFreeDays ?? 47,
+            complianceScore: d.complianceScore ?? 73,
+          });
+        }
+
+        if (sensorRes.success && Array.isArray(sensorRes.data) && sensorRes.data.length > 0) {
+          setLiveSensors(sensorRes.data.map(mapApiSensor));
+        }
+
+        if (alertRes.success && Array.isArray(alertRes.data) && alertRes.data.length > 0) {
+          setLiveAlerts(alertRes.data.map(mapApiAlert));
+        }
+
+        setBackendAvailable(true);
+      } catch (err) {
+        console.warn('[useLiveData] Backend unavailable, using mock data:', err);
+        setBackendAvailable(false);
+      }
+    };
+
+    fetchAll();
+    return () => {
+      active = false;
+    };
+  }, [isAuthenticated]);
+
+  // Socket.IO subscriptions for real-time updates
+  useEffect(() => {
+    if (!backendAvailable) return;
+
+    const socket = getSocket() || connectSocket();
+    if (!socket) return;
+
+    const onDashboardUpdate = (data: any) => {
+      if (data) {
+        setLiveKPI(prev => ({
+          ...prev,
+          ...(data.plantHealth !== undefined && { plantHealth: data.plantHealth }),
+          ...(data.riskScore !== undefined && { riskScore: data.riskScore }),
+          ...(data.activeWorkers !== undefined && { activeWorkers: data.activeWorkers }),
+          ...(data.sensorsOnline !== undefined && { sensorsOnline: data.sensorsOnline }),
+          ...(data.activePermits !== undefined && { activePermits: data.activePermits }),
+          ...(data.criticalAlerts !== undefined && { criticalAlerts: data.criticalAlerts }),
+          ...(data.warningAlerts !== undefined && { warningAlerts: data.warningAlerts }),
+        }));
+      }
+    };
+
+    const onSensorUpdate = (data: any) => {
+      if (data?.id) {
+        setLiveSensors(prev =>
+          prev.map(s => (s.id === data.id ? { ...s, ...mapApiSensor(data) } : s))
+        );
+      }
+    };
+
+    const onNewAlert = (data: any) => {
+      if (data) {
+        setLiveAlerts(prev => [mapApiAlert(data), ...prev].slice(0, 50));
+      }
+    };
+
+    const onAlertAcknowledged = (data: any) => {
+      if (data?.id) {
+        setLiveAlerts(prev => prev.map(a => (a.id === data.id ? { ...a, acknowledged: true } : a)));
+      }
+    };
+
+    socket.on(EVENTS.DASHBOARD_UPDATE, onDashboardUpdate);
+    socket.on(EVENTS.SENSOR_UPDATE, onSensorUpdate);
+    socket.on(EVENTS.ALERT_NEW, onNewAlert);
+    socket.on(EVENTS.ALERT_ACKNOWLEDGED, onAlertAcknowledged);
+
+    return () => {
+      socket.off(EVENTS.DASHBOARD_UPDATE, onDashboardUpdate);
+      socket.off(EVENTS.SENSOR_UPDATE, onSensorUpdate);
+      socket.off(EVENTS.ALERT_NEW, onNewAlert);
+      socket.off(EVENTS.ALERT_ACKNOWLEDGED, onAlertAcknowledged);
+    };
+  }, [backendAvailable]);
+
+  // Gentle mock fluctuation fallback when no backend
+  useEffect(() => {
+    if (backendAvailable) return;
+
+    const sensorTimer = setInterval(() => {
+      setLiveSensors(prev =>
+        prev.map(sensor => {
+          const noise = (Math.random() - 0.5) * 0.06 * sensor.value;
+          const newValue = parseFloat(
+            Math.max(sensor.min, Math.min(sensor.max * 1.1, sensor.value + noise)).toFixed(2)
+          );
+          const ratio = newValue / sensor.threshold;
+          let status: typeof sensor.status = 'online';
+          if (ratio >= 1.0) status = 'critical';
+          else if (ratio >= 0.8) status = 'warning';
+          else if (sensor.status === 'offline') status = 'offline';
+          return { ...sensor, value: newValue, status, lastUpdated: 'just now' };
+        })
+      );
+
       setLiveKPI(prev => ({
         ...prev,
         plantHealth: Math.max(60, Math.min(95, prev.plantHealth + (Math.random() - 0.5) * 1.5)),
@@ -37,18 +229,30 @@ export function useLiveData() {
     }, 3000);
 
     return () => clearInterval(sensorTimer);
-  }, []);
+  }, [backendAvailable]);
 
-  const acknowledgeAlert = useCallback((id: string) => {
-    setLiveAlerts(prev => prev.map(a => a.id === id ? { ...a, acknowledged: true } : a));
-  }, []);
+  const acknowledgeAlert = useCallback(
+    async (id: string) => {
+      // Optimistic update
+      setLiveAlerts(prev => prev.map(a => (a.id === id ? { ...a, acknowledged: true } : a)));
+
+      if (backendAvailable) {
+        try {
+          await alertsApi.acknowledge(id);
+        } catch (err) {
+          console.warn('[useLiveData] Failed to acknowledge alert on backend:', err);
+        }
+      }
+    },
+    [backendAvailable]
+  );
 
   return {
     liveSensors,
     liveAlerts,
     liveKPI,
     currentTime,
-    workers,
     acknowledgeAlert,
+    backendAvailable,
   };
 }

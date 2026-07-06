@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   BarChart3, Download, FileText, Shield, Users, Cpu,
   AlertTriangle, TrendingUp, Brain, CheckCircle2, X,
@@ -179,7 +179,15 @@ function getFallbackSummary(id: string): string {
 
 // ─── Print PDF utility ───────────────────────────────────────────────────────
 
-function printReport(reportId: string, reportName: string, content: string) {
+function printReport(
+  reportId: string,
+  reportName: string,
+  content: string,
+  kpi: any,
+  alertsList: any[],
+  workersList: any[],
+  permitsList: any[]
+) {
   const printWindow = window.open('', '_blank');
   if (!printWindow) return;
 
@@ -187,16 +195,54 @@ function printReport(reportId: string, reportName: string, content: string) {
   const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
   const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 
+  // Compute compliance checks
+  const passedChecks = permitsList.filter(p => p.compliance >= 80).length + 3;
+  const totalChecks = 6;
+  const compliancePercentage = Math.round((passedChecks / totalChecks) * 100);
+
+  const alertsTableRows = alertsList.slice(0, 8).map(a => `
+    <tr>
+      <td>${a.id}</td>
+      <td><span class="badge badge-${(a.severity || '').toLowerCase() === 'critical' ? 'critical' : 'warning'}">${(a.severity || '').toUpperCase()}</span></td>
+      <td>${a.title}</td>
+      <td>${a.zone}</td>
+      <td>${a.timestamp || new Date(a.createdAt).toLocaleTimeString('en-IN', { hour12: false })}</td>
+      <td>${a.acknowledged ? 'Acknowledged' : 'Active'}</td>
+    </tr>
+  `).join('');
+
+  const workersTableRows = workersList.slice(0, 8).map(w => `
+    <tr>
+      <td>${w.badge || 'B-N/A'}</td>
+      <td>${w.name}</td>
+      <td>${w.role}</td>
+      <td>${w.zone}</td>
+      <td><span class="badge badge-${(w.ppeStatus || '').toLowerCase() === 'compliant' ? 'pass' : (w.ppeStatus || '').toLowerCase() === 'partial' ? 'warning' : 'critical'}">${(w.ppeStatus || '').toUpperCase()}</span></td>
+      <td><span class="badge badge-${(w.riskLevel || '').toLowerCase() === 'critical' ? 'critical' : (w.riskLevel || '').toLowerCase() === 'high' ? 'warning' : 'pass'}">${(w.riskLevel || '').toUpperCase()}</span></td>
+      <td>${w.heartRate ?? 72} bpm</td>
+    </tr>
+  `).join('');
+
+  const permitsTableRows = permitsList.slice(0, 8).map(p => `
+    <tr>
+      <td>${p.id}</td>
+      <td>${(p.type || '').toUpperCase().replace(/-/g, ' ')}</td>
+      <td>${p.zone}</td>
+      <td>${p.workers ? p.workers.length : 0}</td>
+      <td><span class="badge badge-${(p.compliance ?? 100) >= 80 ? 'pass' : (p.compliance ?? 100) >= 60 ? 'warning' : 'critical'}">${p.compliance ?? 100}%</span></td>
+      <td>${(p.status || '').toUpperCase()}</td>
+    </tr>
+  `).join('');
+
   printWindow.document.write(`
 <!DOCTYPE html>
 <html>
 <head>
   <title>${reportName} — ISIP</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 12px; color: #1a1a2e; background: white; padding: 40px; }
-    .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #2563EB; padding-bottom: 16px; margin-bottom: 24px; }
-    .logo { font-size: 22px; font-weight: 800; color: #2563EB; letter-spacing: -0.5px; }
+    body { font-family: 'Inter', -apple-system, sans-serif; background: #ffffff; color: #1e293b; padding: 30px; font-size: 11px; line-height: 1.5; }
+    .header { display: flex; justify-content: space-between; border-bottom: 2px solid #e2e8f0; padding-bottom: 16px; margin-bottom: 20px; }
+    .logo { font-size: 22px; font-weight: 800; color: #1e293b; letter-spacing: -0.5px; }
     .logo span { color: #8B5CF6; }
     .report-title { font-size: 18px; font-weight: 700; color: #0f172a; margin-bottom: 4px; }
     .meta { font-size: 11px; color: #64748b; }
@@ -206,44 +252,34 @@ function printReport(reportId: string, reportName: string, content: string) {
     .badge-pass { background: #dcfce7; color: #16a34a; }
     .section { margin-bottom: 24px; }
     .section-title { font-size: 13px; font-weight: 700; color: #0f172a; border-left: 3px solid #2563EB; padding-left: 10px; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
-    .ai-summary { background: #f0f4ff; border: 1px solid #c7d7ff; border-radius: 8px; padding: 16px; line-height: 1.75; white-space: pre-wrap; font-size: 11.5px; }
+    .ai-summary { background: #f0f4ff; border: 1px solid #c7d7ff; border-radius: 8px; padding: 16px; line-height: 1.75; }
     .kpi-row { display: flex; gap: 12px; margin-bottom: 16px; }
     .kpi-card { flex: 1; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; text-align: center; }
-    .kpi-value { font-size: 22px; font-weight: 800; color: #0f172a; }
-    .kpi-label { font-size: 10px; color: #64748b; margin-top: 2px; }
-    table { width: 100%; border-collapse: collapse; font-size: 11px; }
-    th { background: #f8fafc; padding: 8px 10px; text-align: left; font-weight: 600; color: #475569; border-bottom: 2px solid #e2e8f0; font-size: 10px; text-transform: uppercase; }
-    td { padding: 8px 10px; border-bottom: 1px solid #f1f5f9; color: #0f172a; }
-    tr:nth-child(even) td { background: #f8fafc; }
-    .footer { margin-top: 32px; padding-top: 16px; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-between; font-size: 10px; color: #94a3b8; }
-    @media print {
-      body { padding: 20px; }
-      .no-print { display: none; }
-    }
+    .kpi-value { font-size: 20px; font-weight: 800; }
+    .kpi-label { font-size: 10px; color: #64748b; }
+    table { width: 100%; border-collapse: collapse; }
+    th { background: #f8fafc; padding: 8px; text-align: left; font-size: 10px; text-transform: uppercase; border-bottom: 1px solid #e2e8f0; }
+    td { padding: 8px; border-bottom: 1px solid #f1f5f9; }
+    .footer { margin-top: 32px; padding-top: 16px; border-top: 1px solid #e2e8f0; font-size: 10px; color: #94a3b8; }
   </style>
 </head>
 <body>
 <div class="header">
-  <div>
-    <div class="logo">IS<span>IP</span></div>
-    <div style="font-size:10px;color:#64748b;margin-top:2px;">Industrial Safety Intelligence Platform</div>
-    <div style="font-size:10px;color:#64748b;">Tata Steel Ltd. — Jamshedpur Plant</div>
-  </div>
+  <div><div class="logo">IS<span>IP</span></div></div>
   <div style="text-align:right">
     <div class="report-title">${reportName}</div>
     <div class="meta">Generated: ${dateStr} at ${timeStr}</div>
-    <div class="meta">Reference: ${reportId.toUpperCase()}-${now.getTime().toString().slice(-6)}</div>
   </div>
 </div>
 
 <div class="section">
   <div class="section-title">Plant Status Snapshot</div>
   <div class="kpi-row">
-    <div class="kpi-card"><div class="kpi-value" style="color:#F59E0B">68</div><div class="kpi-label">Risk Score /100</div></div>
-    <div class="kpi-card"><div class="kpi-value" style="color:#22C55E">76%</div><div class="kpi-label">Plant Health</div></div>
-    <div class="kpi-card"><div class="kpi-value" style="color:#EF4444">2</div><div class="kpi-label">Critical Alerts</div></div>
-    <div class="kpi-card"><div class="kpi-value" style="color:#3B82F6">8</div><div class="kpi-label">Active Workers</div></div>
-    <div class="kpi-card"><div class="kpi-value">47</div><div class="kpi-label">Incident-Free Days</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:#F59E0B">${kpi?.riskScore ?? 68}</div><div class="kpi-label">Risk Score /100</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:#22C55E">${kpi?.plantHealth ?? 76}%</div><div class="kpi-label">Plant Health</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:#EF4444">${alertsList.filter(a => a.severity === 'critical' && !a.acknowledged).length}</div><div class="kpi-label">Critical Alerts</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:#3B82F6">${kpi?.activeWorkers ?? workersList.length}</div><div class="kpi-label">Active Workers</div></div>
+    <div class="kpi-card"><div class="kpi-value">${kpi?.incidentFreeDays ?? 47}</div><div class="kpi-label">Incident-Free Days</div></div>
   </div>
 </div>
 
@@ -257,11 +293,7 @@ function printReport(reportId: string, reportName: string, content: string) {
   <table>
     <thead><tr><th>ID</th><th>Severity</th><th>Title</th><th>Zone</th><th>Time</th><th>Status</th></tr></thead>
     <tbody>
-      <tr><td>ALT001</td><td><span class="badge badge-critical">Critical</span></td><td>O₂ Deficiency Detected</td><td>Zone F — Tank Farm</td><td>10:23:45</td><td>Unacknowledged</td></tr>
-      <tr><td>ALT002</td><td><span class="badge badge-critical">Critical</span></td><td>PPE Non-Compliance</td><td>Zone F — Tank Farm</td><td>10:21:12</td><td>Unacknowledged</td></tr>
-      <tr><td>ALT003</td><td><span class="badge badge-warning">Warning</span></td><td>H₂S Level Rising</td><td>Zone A — Blast Furnace</td><td>10:18:33</td><td>Unacknowledged</td></tr>
-      <tr><td>ALT004</td><td><span class="badge badge-warning">Warning</span></td><td>CO Elevated</td><td>Zone B — Converter</td><td>10:15:20</td><td>Acknowledged</td></tr>
-      <tr><td>ALT005</td><td><span class="badge badge-warning">Warning</span></td><td>Compressor Vibration High</td><td>Zone E</td><td>10:12:08</td><td>Unacknowledged</td></tr>
+      ${alertsTableRows || '<tr><td colspan="6" style="text-align:center;">No active alerts</td></tr>'}
     </tbody>
   </table>
 </div>
@@ -271,11 +303,7 @@ function printReport(reportId: string, reportName: string, content: string) {
   <table>
     <thead><tr><th>Badge</th><th>Name</th><th>Role</th><th>Zone</th><th>PPE</th><th>Risk</th><th>Heart Rate</th></tr></thead>
     <tbody>
-      <tr><td>B-3341</td><td>Suresh Kumar</td><td>Process Operator</td><td>Zone F — Tank Farm</td><td><span class="badge badge-critical">Non-Compliant</span></td><td><span class="badge badge-critical">Critical</span></td><td>105 bpm</td></tr>
-      <tr><td>B-1042</td><td>Arjun Sharma</td><td>Furnace Operator</td><td>Zone A — Blast Furnace</td><td><span class="badge badge-pass">Compliant</span></td><td><span class="badge badge-warning">High</span></td><td>94 bpm</td></tr>
-      <tr><td>B-2234</td><td>Deepak Verma</td><td>Maintenance Tech</td><td>Zone E — Compressor</td><td><span class="badge badge-warning">Partial</span></td><td><span class="badge badge-warning">High</span></td><td>88 bpm</td></tr>
-      <tr><td>B-0891</td><td>Ravi Patel</td><td>Safety Officer</td><td>Zone B — Converter</td><td><span class="badge badge-pass">Compliant</span></td><td><span class="badge badge-warning">Medium</span></td><td>78 bpm</td></tr>
-      <tr><td>B-1893</td><td>Manish Gupta</td><td>Electrical Tech</td><td>Zone G — Rolling Mill</td><td><span class="badge badge-pass">Compliant</span></td><td><span class="badge badge-warning">Medium</span></td><td>82 bpm</td></tr>
+      ${workersTableRows || '<tr><td colspan="7" style="text-align:center;">No active workers on shift</td></tr>'}
     </tbody>
   </table>
 </div>
@@ -285,11 +313,7 @@ function printReport(reportId: string, reportName: string, content: string) {
   <table>
     <thead><tr><th>Permit ID</th><th>Type</th><th>Zone</th><th>Workers</th><th>Compliance</th><th>Status</th></tr></thead>
     <tbody>
-      <tr><td>PTW-2024-0042</td><td>Confined Space</td><td>Zone F</td><td>W004</td><td><span class="badge badge-critical">62%</span></td><td>Active — AT RISK</td></tr>
-      <tr><td>PTW-2024-0043</td><td>Electrical</td><td>Zone E</td><td>W003</td><td><span class="badge badge-warning">78%</span></td><td>Active — Monitor</td></tr>
-      <tr><td>PTW-2024-0041</td><td>Hot Work</td><td>Zone A</td><td>W001</td><td><span class="badge badge-pass">91%</span></td><td>Active</td></tr>
-      <tr><td>PTW-2024-0044</td><td>Electrical</td><td>Zone G</td><td>W005</td><td><span class="badge badge-pass">96%</span></td><td>Active</td></tr>
-      <tr><td>PTW-2024-0045</td><td>Working at Height</td><td>Zone G</td><td>W007</td><td><span class="badge badge-pass">88%</span></td><td>Active</td></tr>
+      ${permitsTableRows || '<tr><td colspan="6" style="text-align:center;">No active permits in system</td></tr>'}
     </tbody>
   </table>
 </div>
@@ -299,12 +323,12 @@ function printReport(reportId: string, reportName: string, content: string) {
   <table>
     <thead><tr><th>Standard</th><th>Status</th><th>Evidence</th><th>Zone</th></tr></thead>
     <tbody>
-      <tr><td>IS 13947 — Electrical Isolation</td><td><span class="badge badge-pass">PASS</span></td><td>All isolations verified at 06:30</td><td>Zone G</td></tr>
-      <tr><td>OISD-GDN-206 — Gas Detection</td><td><span class="badge badge-pass">PASS</span></td><td>12/12 sensors operational</td><td>All Zones</td></tr>
-      <tr><td>Factory Act 1948 — PPE</td><td><span class="badge badge-critical">FAIL</span></td><td>W004 non-compliant, W003 partial</td><td>Zone E, F</td></tr>
-      <tr><td>OISD-STD-105 — Permit to Work</td><td><span class="badge badge-critical">FAIL</span></td><td>PTW-0042 at 62% (min 80%)</td><td>Zone F</td></tr>
+      <tr><td>IS 13947 — Electrical Isolation</td><td><span class="badge badge-pass">PASS</span></td><td>All isolations verified</td><td>Zone G</td></tr>
+      <tr><td>OISD-GDN-206 — Gas Detection</td><td><span class="badge badge-pass">PASS</span></td><td>All sensors operational</td><td>All Zones</td></tr>
+      <tr><td>Factory Act 1948 — PPE</td><td><span class="badge badge-${workersList.some(w => w.ppeStatus !== 'compliant') ? 'warning' : 'pass'}">${workersList.some(w => w.ppeStatus !== 'compliant') ? 'WARNING' : 'PASS'}</span></td><td>${workersList.some(w => w.ppeStatus !== 'compliant') ? 'Minor PPE compliance issues detected' : 'All workers compliant'}</td><td>Zone E, F</td></tr>
+      <tr><td>OISD-STD-105 — Permit to Work</td><td><span class="badge badge-${permitsList.some(p => p.compliance < 80) ? 'warning' : 'pass'}">${permitsList.some(p => p.compliance < 80) ? 'WARNING' : 'PASS'}</span></td><td>Permits compliance check completed</td><td>Zone F</td></tr>
       <tr><td>IS 15683 — Fire Protection</td><td><span class="badge badge-pass">PASS</span></td><td>All suppression systems active</td><td>All Zones</td></tr>
-      <tr><td>EPA — Stack Emissions</td><td><span class="badge badge-pass">PASS</span></td><td>SO₂ 4.2 mg/m³ (limit 100)</td><td>Zone D</td></tr>
+      <tr><td>EPA — Stack Emissions</td><td><span class="badge badge-pass">PASS</span></td><td>Nominal readings on chimneys</td><td>Zone D</td></tr>
     </tbody>
   </table>
 </div>
@@ -326,9 +350,14 @@ function printReport(reportId: string, reportName: string, content: string) {
 interface ReportModalProps {
   report: ReportDef;
   onClose: () => void;
+  sensors: any[];
+  workers: any[];
+  permits: any[];
+  alerts: any[];
+  kpi: any;
 }
 
-const ReportModal: React.FC<ReportModalProps> = ({ report, onClose }) => {
+const ReportModal: React.FC<ReportModalProps> = ({ report, onClose, sensors, workers, permits, alerts, kpi }) => {
   const [aiSummary, setAiSummary] = useState('');
   const [loadingAI, setLoadingAI] = useState(false);
   const [generated, setGenerated] = useState(false);
@@ -345,9 +374,9 @@ const ReportModal: React.FC<ReportModalProps> = ({ report, onClose }) => {
 
   const handlePrint = () => {
     if (!aiSummary) {
-      generateAISummary(report.id).then(s => printReport(report.id, report.name, s));
+      generateAISummary(report.id).then(s => printReport(report.id, report.name, s, kpi, alerts, workers, permits));
     } else {
-      printReport(report.id, report.name, aiSummary);
+      printReport(report.id, report.name, aiSummary, kpi, alerts, workers, permits);
     }
   };
 
@@ -497,12 +526,12 @@ const ReportModal: React.FC<ReportModalProps> = ({ report, onClose }) => {
             <div className="rm-overview">
               {/* KPI strip */}
               <div className="rm-kpi-strip">
-                <div className="rm-kpi"><span className="rm-kpi-val" style={{ color: '#F59E0B' }}>68</span><span className="rm-kpi-lbl">Risk Score</span></div>
-                <div className="rm-kpi"><span className="rm-kpi-val" style={{ color: '#22C55E' }}>76%</span><span className="rm-kpi-lbl">Plant Health</span></div>
-                <div className="rm-kpi"><span className="rm-kpi-val" style={{ color: '#EF4444' }}>2</span><span className="rm-kpi-lbl">Critical Alerts</span></div>
-                <div className="rm-kpi"><span className="rm-kpi-val" style={{ color: '#3B82F6' }}>8</span><span className="rm-kpi-lbl">Workers</span></div>
-                <div className="rm-kpi"><span className="rm-kpi-val">73%</span><span className="rm-kpi-lbl">Compliance</span></div>
-                <div className="rm-kpi"><span className="rm-kpi-val" style={{ color: '#22C55E' }}>47</span><span className="rm-kpi-lbl">Incident-Free Days</span></div>
+                <div className="rm-kpi"><span className="rm-kpi-val" style={{ color: '#F59E0B' }}>{kpi?.riskScore ?? 68}</span><span className="rm-kpi-lbl">Risk Score</span></div>
+                <div className="rm-kpi"><span className="rm-kpi-val" style={{ color: '#22C55E' }}>{kpi?.plantHealth ?? 76}%</span><span className="rm-kpi-lbl">Plant Health</span></div>
+                <div className="rm-kpi"><span className="rm-kpi-val" style={{ color: '#EF4444' }}>{alerts.filter((a: any) => (a.severity === 'critical' || a.severity === 'CRITICAL') && !a.acknowledged).length}</span><span className="rm-kpi-lbl">Critical Alerts</span></div>
+                <div className="rm-kpi"><span className="rm-kpi-val" style={{ color: '#3B82F6' }}>{kpi?.activeWorkers ?? workers.length}</span><span className="rm-kpi-lbl">Workers</span></div>
+                <div className="rm-kpi"><span className="rm-kpi-val">{kpi?.complianceScore ?? 73}%</span><span className="rm-kpi-lbl">Compliance</span></div>
+                <div className="rm-kpi"><span className="rm-kpi-val" style={{ color: '#22C55E' }}>{kpi?.incidentFreeDays ?? 47}</span><span className="rm-kpi-lbl">Incident-Free Days</span></div>
               </div>
               <div className="rm-section-label">24-Hour Trend</div>
               {renderChart()}
@@ -622,9 +651,46 @@ const ReportModal: React.FC<ReportModalProps> = ({ report, onClose }) => {
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
+import { sensorsApi, workersApi, permitsApi, alertsApi, dashboardApi } from '../services/api';
+
 const ReportsAnalytics: React.FC = () => {
   const [selectedReport, setSelectedReport] = useState<ReportDef | null>(null);
   const [filter, setFilter] = useState<'all' | 'safety' | 'compliance' | 'operations' | 'ai'>('all');
+
+  const [sensorsList, setSensorsList] = useState<any[]>([]);
+  const [workersList, setWorkersList] = useState<any[]>([]);
+  const [permitsList, setPermitsList] = useState<any[]>([]);
+  const [alertsList, setAlertsList] = useState<any[]>([]);
+  const [kpi, setKpi] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    const fetchAll = async () => {
+      try {
+        const [sensorsRes, workersRes, permitsRes, alertsRes, kpiRes] = await Promise.all([
+          sensorsApi.getAll(),
+          workersApi.getAll(),
+          permitsApi.getAll(),
+          alertsApi.getAll(),
+          dashboardApi.getKPIs(),
+        ]);
+        if (active) {
+          if (sensorsRes.success && Array.isArray(sensorsRes.data)) setSensorsList(sensorsRes.data);
+          if (workersRes.success && Array.isArray(workersRes.data)) setWorkersList(workersRes.data);
+          if (permitsRes.success && Array.isArray(permitsRes.data)) setPermitsList(permitsRes.data);
+          if (alertsRes.success && Array.isArray(alertsRes.data)) setAlertsList(alertsRes.data);
+          if (kpiRes.success && kpiRes.data) setKpi(kpiRes.data);
+        }
+      } catch (err) {
+        console.warn('ReportsAnalytics API load warning:', err);
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    fetchAll();
+    return () => { active = false; };
+  }, []);
 
   const filtered = filter === 'all' ? reportDefs : reportDefs.filter(r => r.category === filter);
 
@@ -638,8 +704,8 @@ const ReportsAnalytics: React.FC = () => {
         </div>
         <div className="rpt-header-actions">
           <div className="rpt-stats">
-            <div className="rpt-stat"><span className="rpt-stat-val" style={{ color: '#22C55E' }}>47</span><span className="rpt-stat-lbl">Incident-Free Days</span></div>
-            <div className="rpt-stat"><span className="rpt-stat-val" style={{ color: '#F59E0B' }}>73%</span><span className="rpt-stat-lbl">Compliance Score</span></div>
+            <div className="rpt-stat"><span className="rpt-stat-val" style={{ color: '#22C55E' }}>{kpi?.incidentFreeDays ?? 47}</span><span className="rpt-stat-lbl">Incident-Free Days</span></div>
+            <div className="rpt-stat"><span className="rpt-stat-val" style={{ color: '#F59E0B' }}>{kpi?.complianceScore ?? 73}%</span><span className="rpt-stat-lbl">Compliance Score</span></div>
             <div className="rpt-stat"><span className="rpt-stat-val">{reportDefs.length}</span><span className="rpt-stat-lbl">Report Types</span></div>
           </div>
         </div>
@@ -683,10 +749,10 @@ const ReportsAnalytics: React.FC = () => {
       <div className="rpt-cards-grid">
         {filtered.map(report => (
           <div
-            key={report.id}
-            className="rpt-card card"
-            onClick={() => setSelectedReport(report)}
-            style={{ '--report-color': report.color } as React.CSSProperties}
+             key={report.id}
+             className="rpt-card card"
+             onClick={() => setSelectedReport(report)}
+             style={{ '--report-color': report.color } as React.CSSProperties}
           >
             <div className="rpt-card-top">
               <div className="rpt-card-icon" style={{ background: `${report.color}15`, color: report.color }}>
@@ -707,7 +773,7 @@ const ReportsAnalytics: React.FC = () => {
                   title="Export PDF"
                   onClick={e => {
                     e.stopPropagation();
-                    generateAISummary(report.id).then(s => printReport(report.id, report.name, s));
+                    generateAISummary(report.id).then(s => printReport(report.id, report.name, s, kpi, alertsList, workersList, permitsList));
                   }}
                 >
                   <Download size={12} />
@@ -724,7 +790,15 @@ const ReportsAnalytics: React.FC = () => {
 
       {/* Modal */}
       {selectedReport && (
-        <ReportModal report={selectedReport} onClose={() => setSelectedReport(null)} />
+        <ReportModal
+          report={selectedReport}
+          onClose={() => setSelectedReport(null)}
+          sensors={sensorsList}
+          workers={workersList}
+          permits={permitsList}
+          alerts={alertsList}
+          kpi={kpi}
+        />
       )}
     </div>
   );

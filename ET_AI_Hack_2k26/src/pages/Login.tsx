@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Activity, User, Lock, ShieldAlert, ArrowRight } from 'lucide-react';
 import bgImg from '../assets/bg-img.jpg';
+import { useAuth } from '../context/AuthContext';
 import './Login.css';
 
 interface LoginProps {
@@ -8,12 +9,13 @@ interface LoginProps {
 }
 
 const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
+  const { login } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     
@@ -24,15 +26,27 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
 
     setLoading(true);
 
-    // Simulate network delay for premium feel
-    setTimeout(() => {
-      if (username === 'test' && password === 'test@123') {
+    let emailInput = username;
+    if (!username.includes('@')) {
+      if (username === 'test') {
+        emailInput = 'admin@isip.com';
+      } else {
+        emailInput = `${username}@isip.com`;
+      }
+    }
+
+    try {
+      const success = await login(emailInput, password);
+      if (success) {
         onLoginSuccess();
       } else {
-        setError('Invalid username or password.');
+        setError('Invalid username/email or password.');
       }
+    } catch (err: any) {
+      setError(err.message || 'An error occurred during login.');
+    } finally {
       setLoading(false);
-    }, 800);
+    }
   };
 
   return (

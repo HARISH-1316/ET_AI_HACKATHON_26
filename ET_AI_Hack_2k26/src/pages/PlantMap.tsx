@@ -509,14 +509,15 @@ const Equipment3D: React.FC<{ eq: typeof EQUIPMENT[0] }> = ({ eq }) => {
 };
 
 interface Worker3DProps {
-  worker: typeof workers[0];
+  worker: any;
   index: number;
   isSelected: boolean;
   onClick: () => void;
+  zones: any[];
 }
 
-const Worker3D: React.FC<Worker3DProps> = ({ worker, index, isSelected, onClick }) => {
-  const zone = ZONES.find(z => z.workers.includes(worker.id));
+const Worker3D: React.FC<Worker3DProps> = ({ worker, index, isSelected, onClick, zones }) => {
+  const zone = zones.find(z => z.workers.includes(worker.id));
   if (!zone) return null;
 
   // Render spaced out inside their active zone
@@ -525,7 +526,7 @@ const Worker3D: React.FC<Worker3DProps> = ({ worker, index, isSelected, onClick 
   const [wx3d, _, wy3d] = to3DCoords(wx, wy);
 
   const wc = worker.riskLevel === 'critical' ? '#EF4444' : worker.riskLevel === 'high' ? '#F59E0B' : '#3B82F6';
-  const initials = worker.name.split(' ').map(n => n[0]).join('');
+  const initials = worker.name.split(' ').map((n: string) => n[0]).join('');
 
   return (
     <group position={[wx3d, 0.35, wy3d]}>
@@ -535,18 +536,15 @@ const Worker3D: React.FC<Worker3DProps> = ({ worker, index, isSelected, onClick 
           e.stopPropagation();
           onClick();
         }}
-        castShadow
       >
-        <sphereGeometry args={[0.18, 16, 16]} />
+        <sphereGeometry args={[0.13, 16, 16]} />
         <meshBasicMaterial color={wc} />
       </mesh>
-
       {/* Pin stem */}
-      <mesh position={[0, -0.15, 0]}>
-        <cylinderGeometry args={[0.03, 0.03, 0.3, 8]} />
-        <meshBasicMaterial color={wc} />
+      <mesh position={[0, -0.16, 0]}>
+        <cylinderGeometry args={[0.015, 0.015, 0.32]} />
+        <meshBasicMaterial color="#ffffff" />
       </mesh>
-
       {/* Pulsing hazard ring */}
       {worker.riskLevel === 'critical' && (
         <mesh position={[0, -0.34, 0]} rotation={[-Math.PI / 2, 0, 0]}>
@@ -589,13 +587,14 @@ const Worker3D: React.FC<Worker3DProps> = ({ worker, index, isSelected, onClick 
 
 interface Sensor3DProps {
   sensorId: string;
-  zone: typeof ZONES[0];
+  zone: any;
   index: number;
   isSelected: boolean;
   onClick: () => void;
+  sensors: any[];
 }
 
-const Sensor3D: React.FC<Sensor3DProps> = ({ sensorId, zone, index, isSelected, onClick }) => {
+const Sensor3D: React.FC<Sensor3DProps> = ({ sensorId, zone, index, isSelected, onClick, sensors }) => {
   const s = sensors.find(x => x.id === sensorId);
   if (!s) return null;
 
@@ -682,9 +681,9 @@ const CCTV3D: React.FC<{ cx: number; cy: number }> = ({ cx, cy }) => {
   );
 };
 
-const Permit3D: React.FC<{ permit: typeof permits[0] }> = ({ permit }) => {
-  const zone = ZONES.find(z => z.label.includes(permit.zone.split(' — ')[0]?.trim() || '')) ||
-               ZONES.find(z => permit.zone.includes(z.id));
+const Permit3D: React.FC<{ permit: any; zones: any[] }> = ({ permit, zones }) => {
+  const zone = zones.find(z => z.label.includes(permit.zone.split(' — ')[0]?.trim() || '')) ||
+               zones.find(z => permit.zone.includes(z.id));
   if (!zone) return null;
 
   const [zx3d, _, zy3d] = to3DCoords(zone.x + zone.w - 12, zone.y + 20);
@@ -725,6 +724,76 @@ const Exit3D: React.FC<{ exit: typeof EXITS[0] }> = ({ exit }) => {
   );
 };
 
+import { useEffect } from 'react';
+import { sensorsApi, workersApi, permitsApi } from '../services/api';
+import { getSocket, connectSocket, EVENTS } from '../services/socket';
+import { sensors as mockSensors, workers as mockWorkers, permits as mockPermits } from '../data/mockData';
+
+function timeAgo(date: Date): string {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  return `${Math.floor(seconds / 3600)}h ago`;
+}
+
+function mapApiSensor(s: any): any {
+  return {
+    id: s.id,
+    name: s.name,
+    type: (s.type || '').toLowerCase(),
+    zone: s.zone?.name || s.zoneName || s.zone || '',
+    value: s.value ?? 0,
+    unit: s.unit || '',
+    min: s.minValue ?? s.min ?? 0,
+    max: s.maxValue ?? s.max ?? 100,
+    threshold: s.threshold ?? 50,
+    status: (s.status || 'online').toLowerCase(),
+    lastUpdated: s.lastReading ? timeAgo(new Date(s.lastReading)) : 'N/A',
+    equipment: s.equipment?.name || s.equipmentName || '',
+    trend: (s.trend || 'stable').toLowerCase(),
+    history: s.history || [],
+  };
+}
+
+function mapApiWorker(w: any): any {
+  return {
+    id: w.id,
+    name: w.name,
+    role: w.role,
+    zone: w.zone?.name || w.zoneName || w.zone || 'Gate Entry',
+    task: w.task || 'N/A',
+    ppeStatus: (w.ppeStatus || 'compliant').toLowerCase(),
+    permit: w.permit?.title || w.permitName || w.permitId || null,
+    riskLevel: (w.riskLevel || 'low').toLowerCase(),
+    heartRate: w.heartRate ?? 72,
+    gasExposure: w.gasExposure ?? 0,
+    nearbyHazards: w.nearbyHazards || [],
+    lastSeen: w.lastSeen ? timeAgo(new Date(w.lastSeen)) : 'just now',
+    shift: w.shift || 'Morning',
+    badge: w.badge || '',
+    status: (w.status || 'active').toLowerCase(),
+    movementHistory: w.movements || [],
+  };
+}
+
+function mapApiPermit(p: any): any {
+  return {
+    id: p.id,
+    type: (p.type || 'hot-work').toLowerCase().replace('_', '-'),
+    title: p.title || '',
+    zone: p.zone?.name || p.zoneName || p.zone || '',
+    issuer: p.issuer ? `${p.issuer.firstName || ''} ${p.issuer.lastName || ''}`.trim() : 'N/A',
+    workers: p.workers ? p.workers.map((w: any) => w.id || w) : [],
+    equipment: p.equipment ? p.equipment.map((eq: any) => eq.name || eq.equipment?.name || eq) : [],
+    startTime: p.startTime ? new Date(p.startTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '',
+    endTime: p.endTime ? new Date(p.endTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '',
+    status: (p.status || 'pending').toLowerCase(),
+    riskLevel: (p.riskLevel || 'low').toLowerCase(),
+    compliance: p.compliance ?? 100,
+    aiRecommendation: p.aiRecommendation || 'No recommendations',
+  };
+}
+
 const PlantMap: React.FC<PlantMapProps> = ({ onNavigate }) => {
   const [viewMode, setViewMode] = useState<'3d' | '2d'>('3d');
   const [activeLayers, setActiveLayers] = useState<Set<LayerKey>>(
@@ -736,6 +805,107 @@ const PlantMap: React.FC<PlantMapProps> = ({ onNavigate }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const controlsRef = useRef<any>(null);
+
+  const [sensorsState, setSensorsState] = useState<any[]>(mockSensors);
+  const [workersState, setWorkersState] = useState<any[]>(mockWorkers);
+  const [permitsState, setPermitsState] = useState<any[]>(mockPermits);
+  const [loading, setLoading] = useState(true);
+
+  const fetchAllData = async () => {
+    try {
+      const [sensorRes, workerRes, permitRes] = await Promise.all([
+        sensorsApi.getAll(),
+        workersApi.getAll(),
+        permitsApi.getAll(),
+      ]);
+
+      if (sensorRes.success && Array.isArray(sensorRes.data)) {
+        setSensorsState(sensorRes.data.map(mapApiSensor));
+      }
+      if (workerRes.success && Array.isArray(workerRes.data)) {
+        setWorkersState(workerRes.data.map(mapApiWorker));
+      }
+      if (permitRes.success && Array.isArray(permitRes.data)) {
+        setPermitsState(permitRes.data.map(mapApiPermit));
+      }
+    } catch (err) {
+      console.warn('PlantMap API load warning:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchAllData();
+
+    const socket = getSocket() || connectSocket();
+    const handleSensorUpdate = (data: any) => {
+      if (data?.id) {
+        setSensorsState(prev => prev.map(s => s.id === data.id ? { ...s, ...mapApiSensor(data) } : s));
+      }
+    };
+    const handleWorkerUpdate = (data: any) => {
+      if (data?.id) {
+        setWorkersState(prev => prev.map(w => w.id === data.id ? { ...w, ...mapApiWorker(data) } : w));
+      }
+    };
+    const handlePermitCreated = () => fetchAllData();
+    const handlePermitUpdated = () => fetchAllData();
+
+    if (socket) {
+      socket.on(EVENTS.SENSOR_UPDATE, handleSensorUpdate);
+      socket.on(EVENTS.WORKER_UPDATE, handleWorkerUpdate);
+      socket.on(EVENTS.PERMIT_CREATED, handlePermitCreated);
+      socket.on(EVENTS.PERMIT_UPDATED, handlePermitUpdated);
+    }
+
+    return () => {
+      if (socket) {
+        socket.off(EVENTS.SENSOR_UPDATE, handleSensorUpdate);
+        socket.off(EVENTS.WORKER_UPDATE, handleWorkerUpdate);
+        socket.off(EVENTS.PERMIT_CREATED, handlePermitCreated);
+        socket.off(EVENTS.PERMIT_UPDATED, handlePermitUpdated);
+      }
+    };
+  }, []);
+
+  const sensors = sensorsState;
+  const workers = workersState;
+  const permits = permitsState;
+
+  const dynamicZones = ZONES.map(z => {
+    const zoneWorkers = workersState.filter(w => {
+      const wZone = (w.zone || '').toLowerCase();
+      const zName = z.label.toLowerCase();
+      const zCode = z.id.toLowerCase();
+      return wZone.includes(zCode) || zName.includes(wZone) || wZone.includes(zName);
+    });
+
+    const zoneSensors = sensorsState.filter(s => {
+      const sZone = (s.zone || '').toLowerCase();
+      const zName = z.label.toLowerCase();
+      const zCode = z.id.toLowerCase();
+      return sZone.includes(zCode) || zName.includes(sZone) || sZone.includes(zName);
+    });
+
+    let risk: 'safe' | 'warning' | 'critical' = 'safe';
+    if (zoneSensors.some(s => s.status === 'critical' || s.status === 'CRITICAL') || zoneWorkers.some(w => w.riskLevel === 'critical' || w.riskLevel === 'CRITICAL')) {
+      risk = 'critical';
+    } else if (zoneSensors.some(s => s.status === 'warning' || s.status === 'WARNING') || zoneWorkers.some(w => w.riskLevel === 'high' || w.riskLevel === 'HIGH')) {
+      risk = 'warning';
+    }
+
+    return {
+      ...z,
+      risk,
+      workers: zoneWorkers.map(w => w.id),
+      sensorIds: zoneSensors.map(s => s.id),
+    };
+  });
+
+  const selectedZone = selected?.type === 'zone' ? dynamicZones.find(z => z.id === selected.id) : null;
+  const selectedSensor = selected?.type === 'sensor' ? sensors.find(s => s.id === selected.id) : null;
+  const selectedWorker = selected?.type === 'worker' ? workers.find(w => w.id === selected.id) : null;
 
   const handleMouseDown = (e: React.MouseEvent) => {
     setIsDragging(true);
@@ -758,10 +928,6 @@ const PlantMap: React.FC<PlantMapProps> = ({ onNavigate }) => {
       return next;
     });
   };
-
-  const selectedZone = selected?.type === 'zone' ? ZONES.find(z => z.id === selected.id) : null;
-  const selectedSensor = selected?.type === 'sensor' ? sensors.find(s => s.id === selected.id) : null;
-  const selectedWorker = selected?.type === 'worker' ? workers.find(w => w.id === selected.id) : null;
 
   const liveEvents = [
     { time: '10:24:01', text: 'S007: O₂ level 18.1% — CRITICAL', sev: 'critical' },
@@ -879,7 +1045,7 @@ const PlantMap: React.FC<PlantMapProps> = ({ onNavigate }) => {
                 <Pipeline3D start={[480, 55]} end={[500, 42]} active={activeLayers.has('equipment')} />
 
                 {/* Zones */}
-                {ZONES.map(zone => (
+                {dynamicZones.map(zone => (
                   <Zone3D
                     key={zone.id}
                     zone={zone}
@@ -890,7 +1056,7 @@ const PlantMap: React.FC<PlantMapProps> = ({ onNavigate }) => {
                 ))}
 
                 {/* Volumetric Gas clouds inside warning/critical zones */}
-                {activeLayers.has('gas') && ZONES.map(zone => {
+                {activeLayers.has('gas') && dynamicZones.map(zone => {
                   if (zone.risk === 'safe') return null;
                   const height3d = zoneHeights[zone.id] || 1.5;
                   const [cx, _, cz] = to3DCoords(zone.x + zone.w / 2, zone.y + zone.h / 2);
@@ -905,7 +1071,7 @@ const PlantMap: React.FC<PlantMapProps> = ({ onNavigate }) => {
                 })}
 
                 {/* Thermal heat shimmers above hot zones */}
-                {activeLayers.has('temperature') && ZONES.map(zone => {
+                {activeLayers.has('temperature') && dynamicZones.map(zone => {
                   if (zone.id !== 'A' && zone.id !== 'C') return null;
                   const height3d = zoneHeights[zone.id] || 1.5;
                   const [cx, _, cz] = to3DCoords(zone.x + zone.w / 2, zone.y + zone.h / 2);
@@ -937,11 +1103,12 @@ const PlantMap: React.FC<PlantMapProps> = ({ onNavigate }) => {
                     index={i}
                     isSelected={selected?.type === 'worker' && selected.id === w.id}
                     onClick={() => setSelected({ type: 'worker', id: w.id })}
+                    zones={dynamicZones}
                   />
                 ))}
 
                 {/* Sensors */}
-                {activeLayers.has('sensors') && ZONES.map(zone =>
+                {activeLayers.has('sensors') && dynamicZones.map(zone =>
                   zone.sensorIds.slice(0, 2).map((sid, idx) => (
                     <Sensor3D
                       key={sid}
@@ -950,6 +1117,7 @@ const PlantMap: React.FC<PlantMapProps> = ({ onNavigate }) => {
                       index={idx}
                       isSelected={selected?.type === 'sensor' && selected.id === sid}
                       onClick={() => setSelected({ type: 'sensor', id: sid })}
+                      sensors={sensors}
                     />
                   ))
                 )}
@@ -961,7 +1129,7 @@ const PlantMap: React.FC<PlantMapProps> = ({ onNavigate }) => {
 
                 {/* Permits */}
                 {activeLayers.has('permits') && permits.filter(p => p.status === 'active').map(permit => (
-                  <Permit3D key={permit.id} permit={permit} />
+                  <Permit3D key={permit.id} permit={permit} zones={dynamicZones} />
                 ))}
 
                 {/* Emergency exits */}
@@ -1021,7 +1189,7 @@ const PlantMap: React.FC<PlantMapProps> = ({ onNavigate }) => {
               ))}
 
               {/* Zones */}
-              {ZONES.map(zone => {
+              {dynamicZones.map(zone => {
                 const isSelected = selected?.type === 'zone' && selected.id === zone.id;
                 const color = riskColors[zone.risk];
                 return (
@@ -1106,7 +1274,7 @@ const PlantMap: React.FC<PlantMapProps> = ({ onNavigate }) => {
 
               {/* Workers */}
               {activeLayers.has('workers') && workers.map((w, i) => {
-                const zone = ZONES.find(z => z.workers.includes(w.id));
+                const zone = dynamicZones.find(z => z.workers.includes(w.id));
                 if (!zone) return null;
                 const wx = zone.x + 20 + (i % 3) * 20;
                 const wy = zone.y + 35 + Math.floor(i / 3) * 20;
@@ -1116,7 +1284,7 @@ const PlantMap: React.FC<PlantMapProps> = ({ onNavigate }) => {
                      style={{ cursor: 'pointer' }}>
                     <circle cx={wx} cy={wy} r="7" fill={`${wc}25`} stroke={wc} strokeWidth="1.5"/>
                     <text x={wx} y={wy+4} textAnchor="middle" fill={wc} fontSize="7" fontWeight="700">
-                      {w.name.split(' ').map(n => n[0]).join('')}
+                      {w.name.split(' ').map((n: string) => n[0]).join('')}
                     </text>
                     {w.riskLevel === 'critical' && (
                       <circle cx={wx} cy={wy} r="7" fill="none" stroke={wc} strokeWidth="1.5">
@@ -1138,8 +1306,8 @@ const PlantMap: React.FC<PlantMapProps> = ({ onNavigate }) => {
 
               {/* Permit zone overlays */}
               {activeLayers.has('permits') && permits.filter(p => p.status === 'active').map(permit => {
-                const zone = ZONES.find(z => z.label.includes(permit.zone.split(' — ')[0]?.trim() || '')) ||
-                             ZONES.find(z => permit.zone.includes(z.id));
+                const zone = dynamicZones.find(z => z.label.includes(permit.zone.split(' — ')[0]?.trim() || '')) ||
+                             dynamicZones.find(z => permit.zone.includes(z.id));
                 if (!zone) return null;
                 return (
                   <g key={permit.id}>

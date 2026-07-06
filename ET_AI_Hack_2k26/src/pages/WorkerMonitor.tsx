@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Search, X, Heart, MapPin, ShieldCheck, ShieldX, Shield, AlertTriangle, ChevronRight, Brain, Clock } from 'lucide-react';
-import { workers, sensors } from '../data/mockData';
+import { workers as mockWorkers, sensors } from '../data/mockData';
 import type { Worker } from '../data/mockData';
+import { workersApi } from '../services/api';
+import { getSocket, connectSocket, EVENTS } from '../services/socket';
 import './WorkerMonitor.css';
 
 interface WorkerMonitorProps {
@@ -18,12 +20,94 @@ const PPE_ICONS: Record<string, React.ReactNode> = {
   'non-compliant': <ShieldX size={14} color="#EF4444" />,
 };
 
+function timeAgo(date: Date): string {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  return `${Math.floor(seconds / 3600)}h ago`;
+}
+
+function mapApiWorker(w: any): Worker {
+  return {
+    id: w.id,
+    name: w.name,
+    role: w.role,
+    zone: w.zone?.name || w.zoneName || w.zone || 'Gate Entry',
+    task: w.task || 'N/A',
+    ppeStatus: (w.ppeStatus || 'compliant').toLowerCase() as Worker['ppeStatus'],
+    permit: w.permit?.title || w.permitName || w.permitId || null,
+    riskLevel: (w.riskLevel || 'low').toLowerCase() as Worker['riskLevel'],
+    heartRate: w.heartRate ?? 72,
+    gasExposure: w.gasExposure ?? 0,
+    nearbyHazards: w.nearbyHazards || (w.gasExposure > 5 ? ['Gas exposure rising'] : []),
+    lastSeen: w.lastSeen ? timeAgo(new Date(w.lastSeen)) : 'just now',
+    shift: w.shift || 'Morning',
+    badge: w.badge || '',
+    status: (w.status || 'active').toLowerCase() as Worker['status'],
+    movementHistory: w.movements
+      ? w.movements.map((m: any) => ({
+          time: new Date(m.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+          zone: m.zone?.name || m.zoneName || m.zone || '',
+        }))
+      : [{ time: '06:00', zone: 'Gate Entry' }],
+  };
+}
+
 const WorkerMonitor: React.FC<WorkerMonitorProps> = ({ onNavigate }) => {
+  const [workersList, setWorkersList] = useState<Worker[]>(mockWorkers);
   const [search, setSearch] = useState('');
   const [riskFilter, setRiskFilter] = useState('all');
   const [selected, setSelected] = useState<Worker | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const filtered = workers.filter(w => {
+  useEffect(() => {
+    let active = true;
+    const fetchWorkers = async () => {
+      try {
+        const res = await workersApi.getAll();
+        if (active && res.success && Array.isArray(res.data) && res.data.length > 0) {
+          setWorkersList(res.data.map(mapApiWorker));
+        }
+      } catch (err) {
+        console.warn('Worker Monitor api fetch error:', err);
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+
+    fetchWorkers();
+
+    const socket = getSocket() || connectSocket();
+    const handleWorkerUpdate = (data: any) => {
+      if (active && data?.id) {
+        setWorkersList(prev => prev.map(w => w.id === data.id ? { ...w, ...mapApiWorker(data) } : w));
+        // Update selected if open
+        setSelected(prev => prev?.id === data.id ? { ...prev, ...mapApiWorker(data) } : prev);
+      }
+    };
+
+    const handleWorkerMovement = (data: any) => {
+      if (active && data?.id) {
+        // Refetch or update
+        fetchWorkers();
+      }
+    };
+
+    if (socket) {
+      socket.on(EVENTS.WORKER_UPDATE, handleWorkerUpdate);
+      socket.on(EVENTS.WORKER_MOVEMENT, handleWorkerMovement);
+    }
+
+    return () => {
+      active = false;
+      if (socket) {
+        socket.off(EVENTS.WORKER_UPDATE, handleWorkerUpdate);
+        socket.off(EVENTS.WORKER_MOVEMENT, handleWorkerMovement);
+      }
+    };
+  }, []);
+
+  const filtered = workersList.filter(w => {
     const matchSearch = w.name.toLowerCase().includes(search.toLowerCase()) ||
                         w.zone.toLowerCase().includes(search.toLowerCase()) ||
                         w.role.toLowerCase().includes(search.toLowerCase());
@@ -32,10 +116,10 @@ const WorkerMonitor: React.FC<WorkerMonitorProps> = ({ onNavigate }) => {
   });
 
   const riskCounts = {
-    critical: workers.filter(w => w.riskLevel === 'critical').length,
-    high: workers.filter(w => w.riskLevel === 'high').length,
-    medium: workers.filter(w => w.riskLevel === 'medium').length,
-    low: workers.filter(w => w.riskLevel === 'low').length,
+    critical: workersList.filter(w => w.riskLevel === 'critical').length,
+    high: workersList.filter(w => w.riskLevel === 'high').length,
+    medium: workersList.filter(w => w.riskLevel === 'medium').length,
+    low: workersList.filter(w => w.riskLevel === 'low').length,
   };
 
   return (
@@ -45,7 +129,7 @@ const WorkerMonitor: React.FC<WorkerMonitorProps> = ({ onNavigate }) => {
         <div className="page-header" style={{padding:'20px 20px 16px',margin:0,borderBottom:'1px solid var(--border-color)'}}>
           <div>
             <h1 className="page-title">Worker Monitor</h1>
-            <p className="page-subtitle">Real-time workforce safety monitoring · {workers.length} workers on shift</p>
+            <p className="page-subtitle">Real-time workforce safety monitoring · {workersList.length} workers on shift</p>
           </div>
           <div className="flex gap-2 items-center">
             {(Object.entries(riskCounts) as [string, number][]).map(([risk, count]) => count > 0 && (

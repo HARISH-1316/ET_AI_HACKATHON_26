@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { FileText, Clock, Users, Zap, AlertTriangle, CheckCircle, X, Brain, ChevronRight } from 'lucide-react';
-import { permits, workers } from '../data/mockData';
+import { permits as mockPermits, workers as mockWorkers } from '../data/mockData';
+import { permitsApi, workersApi } from '../services/api';
+import { getSocket, connectSocket, EVENTS } from '../services/socket';
 import type { Permit } from '../data/mockData';
 import './ActivePermits.css';
 
@@ -24,20 +26,124 @@ const TYPE_LABELS: Record<string, string> = {
   'chemical': 'Chemical',
 };
 
-const ActivePermits: React.FC<ActivePermitsProps> = ({ onNavigate }) => {
-  const [tab, setTab] = useState<'active' | 'expired' | 'pending'>('active');
-  const [selected, setSelected] = useState<Permit | null>(permits[0]);
+function mapApiPermit(p: any): Permit {
+  return {
+    id: p.id,
+    type: (p.type || 'hot-work').toLowerCase().replace('_', '-') as Permit['type'],
+    title: p.title || '',
+    zone: p.zone?.name || p.zoneName || p.zone || '',
+    issuer: p.issuer ? `${p.issuer.firstName || ''} ${p.issuer.lastName || ''}`.trim() : 'N/A',
+    workers: p.workers ? p.workers.map((w: any) => w.id || w) : [],
+    equipment: p.equipment ? p.equipment.map((eq: any) => eq.name || eq.equipment?.name || eq) : [],
+    startTime: p.startTime ? new Date(p.startTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '',
+    endTime: p.endTime ? new Date(p.endTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '',
+    status: (p.status || 'pending').toLowerCase() as Permit['status'],
+    riskLevel: (p.riskLevel || 'low').toLowerCase() as Permit['riskLevel'],
+    compliance: p.compliance ?? 100,
+    aiRecommendation: p.aiRecommendation || 'No recommendations',
+  };
+}
 
-  const filtered = permits.filter(p =>
+function mapApiWorker(w: any): any {
+  return {
+    id: w.id,
+    name: w.name,
+    role: w.role,
+    ppeStatus: (w.ppeStatus || 'compliant').toLowerCase(),
+  };
+}
+
+const ActivePermits: React.FC<ActivePermitsProps> = ({ onNavigate }) => {
+  const [permitsList, setPermitsList] = useState<Permit[]>(mockPermits);
+  const [workersList, setWorkersList] = useState<any[]>(mockWorkers);
+  const [tab, setTab] = useState<'active' | 'expired' | 'pending'>('active');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const fetchAll = async () => {
+    try {
+      const [permitsRes, workersRes] = await Promise.all([
+        permitsApi.getAll(),
+        workersApi.getAll(),
+      ]);
+
+      if (permitsRes.success && Array.isArray(permitsRes.data)) {
+        const mapped = permitsRes.data.map(mapApiPermit);
+        setPermitsList(mapped);
+      }
+      if (workersRes.success && Array.isArray(workersRes.data)) {
+        setWorkersList(workersRes.data.map(mapApiWorker));
+      }
+    } catch (err) {
+      console.warn('Permits api fetch error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchAll();
+
+    const socket = getSocket() || connectSocket();
+    const handlePermitCreated = (data: any) => {
+      if (data) fetchAll();
+    };
+    const handlePermitUpdated = (data: any) => {
+      if (data) fetchAll();
+    };
+
+    if (socket) {
+      socket.on(EVENTS.PERMIT_CREATED, handlePermitCreated);
+      socket.on(EVENTS.PERMIT_UPDATED, handlePermitUpdated);
+    }
+
+    return () => {
+      if (socket) {
+        socket.off(EVENTS.PERMIT_CREATED, handlePermitCreated);
+        socket.off(EVENTS.PERMIT_UPDATED, handlePermitUpdated);
+      }
+    };
+  }, []);
+
+  const handleApprove = async (id: string) => {
+    try {
+      await permitsApi.approve(id);
+      fetchAll();
+    } catch (err) {
+      console.error('Approve permit failed:', err);
+    }
+  };
+
+  const handleReject = async (id: string) => {
+    try {
+      await permitsApi.reject(id);
+      fetchAll();
+    } catch (err) {
+      console.error('Reject permit failed:', err);
+    }
+  };
+
+  const handleSuspend = async (id: string) => {
+    try {
+      await permitsApi.suspend(id);
+      fetchAll();
+    } catch (err) {
+      console.error('Suspend permit failed:', err);
+    }
+  };
+
+  const filtered = permitsList.filter(p =>
     tab === 'active' ? p.status === 'active' :
     tab === 'expired' ? p.status === 'expired' :
     p.status === 'pending'
   );
 
-  const activeCount = permits.filter(p => p.status === 'active').length;
-  const expiredCount = permits.filter(p => p.status === 'expired').length;
-  const pendingCount = permits.filter(p => p.status === 'pending').length;
-  const criticalPermits = permits.filter(p => p.status === 'active' && p.riskLevel === 'critical').length;
+  const selected = permitsList.find(p => p.id === selectedId) || filtered[0] || null;
+
+  const activeCount = permitsList.filter(p => p.status === 'active').length;
+  const expiredCount = permitsList.filter(p => p.status === 'expired').length;
+  const pendingCount = permitsList.filter(p => p.status === 'pending').length;
+  const criticalPermits = permitsList.filter(p => p.status === 'active' && p.riskLevel === 'critical').length;
 
   return (
     <div className="page-content animate-fade-in">
@@ -62,7 +168,7 @@ const ActivePermits: React.FC<ActivePermitsProps> = ({ onNavigate }) => {
         {[
           { label: 'Active Permits', value: activeCount, borderClass: 'border-blue', color: 'var(--blue)', icon: <FileText size={16}/> },
           { label: 'Critical Risk', value: criticalPermits, borderClass: 'border-critical', color: 'var(--critical)', icon: <AlertTriangle size={16}/> },
-          { label: 'Avg Compliance', value: `${Math.round(permits.filter(p=>p.status==='active').reduce((a,p)=>a+p.compliance,0)/activeCount)}%`, borderClass: 'border-warning', color: 'var(--warning)', icon: <CheckCircle size={16}/> },
+          { label: 'Avg Compliance', value: `${Math.round(permitsList.filter(p=>p.status==='active').reduce((a,p)=>a+p.compliance,0)/activeCount) || 100}%`, borderClass: 'border-warning', color: 'var(--warning)', icon: <CheckCircle size={16}/> },
           { label: 'Pending Approval', value: pendingCount, borderClass: 'border-purple', color: 'var(--purple)', icon: <Clock size={16}/> },
         ].map(k => (
           <div key={k.label} className={`card card-sm permit-metric-card ${k.borderClass}`}>
@@ -100,7 +206,7 @@ const ActivePermits: React.FC<ActivePermitsProps> = ({ onNavigate }) => {
                 <div
                   key={permit.id}
                   className={`permit-card ${isSelected ? 'selected' : ''} ${permit.riskLevel}`}
-                  onClick={() => setSelected(permit)}
+                  onClick={() => setSelectedId(permit.id)}
                 >
                   <div className="permit-card-top">
                     <div>
@@ -195,12 +301,12 @@ const ActivePermits: React.FC<ActivePermitsProps> = ({ onNavigate }) => {
                 <div className="permit-section">
                   <div className="label mb-2">Assigned Workers</div>
                   {selected.workers.map(wid => {
-                    const w = workers.find(x => x.id === wid);
+                    const w = workersList.find(x => x.id === wid);
                     if (!w) return null;
                     return (
                       <div key={wid} className="panel-worker-row" onClick={() => onNavigate('workers')}>
                         <div className="worker-avatar-sm">
-                          {w.name.split(' ').map(n=>n[0]).join('')}
+                          {w.name.split(' ').map((n: string) => n[0]).join('')}
                         </div>
                         <div>
                           <div className="worker-row-name">{w.name}</div>
@@ -234,7 +340,7 @@ const ActivePermits: React.FC<ActivePermitsProps> = ({ onNavigate }) => {
               {/* Actions */}
               {selected.status === 'active' && (
                 <div className="permit-actions">
-                  <button className="btn btn-danger flex-1 center">
+                  <button className="btn btn-danger flex-1 center" onClick={() => handleSuspend(selected.id)}>
                     Suspend Permit
                   </button>
                   <button className="btn btn-ghost flex-1 center" onClick={() => onNavigate('ai-risk')}>
@@ -244,10 +350,10 @@ const ActivePermits: React.FC<ActivePermitsProps> = ({ onNavigate }) => {
               )}
               {selected.status === 'pending' && (
                 <div className="permit-actions">
-                  <button className="btn btn-success-action flex-1 center">
+                  <button className="btn btn-success-action flex-1 center" onClick={() => handleApprove(selected.id)}>
                     Approve Permit
                   </button>
-                  <button className="btn btn-danger flex-1 center">
+                  <button className="btn btn-danger flex-1 center" onClick={() => handleReject(selected.id)}>
                     Reject
                   </button>
                 </div>

@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Search, Filter, Clock, Cpu, Users, FileText, Zap, Brain, ChevronRight, AlertTriangle } from 'lucide-react';
-import { timelineEvents } from '../data/mockData';
+import { timelineEvents as mockTimeline } from '../data/mockData';
 import type { TimelineEvent } from '../data/mockData';
+import { timelineApi } from '../services/api';
+import { getSocket, connectSocket, EVENTS } from '../services/socket';
 import './Timeline.css';
 
 interface TimelineProps {
@@ -32,13 +34,64 @@ const SEV_COLORS: Record<string, string> = {
   info: '#3B82F6',
 };
 
+function mapApiTimeline(e: any): TimelineEvent {
+  return {
+    id: e.id,
+    category: (e.category || 'system').toLowerCase() as TimelineEvent['category'],
+    title: e.title || '',
+    description: e.description || '',
+    timestamp: e.timestamp
+      ? new Date(e.timestamp).toLocaleTimeString('en-IN', { hour12: false })
+      : new Date(e.createdAt).toLocaleTimeString('en-IN', { hour12: false }),
+    severity: (e.severity || 'info').toLowerCase() as TimelineEvent['severity'],
+    zone: e.zone?.name || e.zoneName || e.zone || 'System',
+    relatedId: e.relatedId || undefined,
+  };
+}
+
 const Timeline: React.FC<TimelineProps> = ({ onNavigate }) => {
+  const [timelineList, setTimelineList] = useState<TimelineEvent[]>(mockTimeline);
   const [search, setSearch] = useState('');
   const [catFilter, setCatFilter] = useState<string>('all');
   const [sevFilter, setSevFilter] = useState<string>('all');
-  const [selected, setSelected] = useState<TimelineEvent | null>(timelineEvents[0]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const filtered = timelineEvents.filter(e => {
+  const fetchTimeline = async () => {
+    try {
+      const res = await timelineApi.getAll('limit=50');
+      if (res.success && Array.isArray(res.data) && res.data.length > 0) {
+        setTimelineList(res.data.map(mapApiTimeline));
+      }
+    } catch (err) {
+      console.warn('Timeline api fetch error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchTimeline();
+
+    const socket = getSocket() || connectSocket();
+    const handleNewTimeline = (data: any) => {
+      if (data) {
+        setTimelineList(prev => [mapApiTimeline(data), ...prev].slice(0, 50));
+      }
+    };
+
+    if (socket) {
+      socket.on(EVENTS.TIMELINE_NEW, handleNewTimeline);
+    }
+
+    return () => {
+      if (socket) {
+        socket.off(EVENTS.TIMELINE_NEW, handleNewTimeline);
+      }
+    };
+  }, []);
+
+  const filtered = timelineList.filter(e => {
     const matchSearch = e.title.toLowerCase().includes(search.toLowerCase()) ||
                         e.description.toLowerCase().includes(search.toLowerCase()) ||
                         e.zone.toLowerCase().includes(search.toLowerCase());
@@ -46,6 +99,8 @@ const Timeline: React.FC<TimelineProps> = ({ onNavigate }) => {
     const matchSev = sevFilter === 'all' || e.severity === sevFilter;
     return matchSearch && matchCat && matchSev;
   });
+
+  const selected = timelineList.find(e => e.id === selectedId) || filtered[0] || null;
 
   const getNavTarget = (event: TimelineEvent): string => {
     if (event.category === 'sensor') return 'sensors';
@@ -61,14 +116,14 @@ const Timeline: React.FC<TimelineProps> = ({ onNavigate }) => {
       <div className="page-header">
         <div>
           <h1 className="page-title">Operational Timeline</h1>
-          <p className="page-subtitle">24-hour event log · What happened? · {timelineEvents.length} events recorded</p>
+          <p className="page-subtitle">24-hour event log · What happened? · {timelineList.length} events recorded</p>
         </div>
         <div className="flex gap-2 items-center">
           <span className="badge badge-critical">
-            {timelineEvents.filter(e => e.severity === 'critical').length} Critical
+            {timelineList.filter(e => e.severity === 'critical').length} Critical
           </span>
           <span className="badge badge-warning">
-            {timelineEvents.filter(e => e.severity === 'warning').length} Warnings
+            {timelineList.filter(e => e.severity === 'warning').length} Warnings
           </span>
         </div>
       </div>
@@ -123,7 +178,7 @@ const Timeline: React.FC<TimelineProps> = ({ onNavigate }) => {
                 <div
                   key={evt.id}
                   className={`timeline-spine-item ${i % 2 === 0 ? 'left' : 'right'} ${isSelected ? 'selected' : ''}`}
-                  onClick={() => setSelected(evt)}
+                  onClick={() => setSelectedId(evt.id)}
                 >
                   <div className="timeline-spine-connector">
                     <div className="timeline-spine-dot" style={{background:sevColor, boxShadow: evt.severity==='critical' ? `0 0 8px ${sevColor}60`:undefined}} />
